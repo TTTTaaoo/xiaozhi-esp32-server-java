@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小智 WebSocket 语音测试</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;padding:20px}
+.container{max-width:960px;margin:0 auto}
+h1{text-align:center;margin-bottom:20px;font-size:22px;color:#38bdf8}
+.panel{background:#1e293b;border-radius:12px;padding:16px;margin-bottom:14px}
+.row{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.row:last-child{margin-bottom:0}
+label{font-size:13px;color:#94a3b8;min-width:80px}
+input[type=text]{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:7px 12px;color:#e2e8f0;font-size:13px;min-width:180px}
+input:focus{outline:none;border-color:#38bdf8}
+button{padding:8px 16px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+button:disabled{opacity:.35;cursor:not-allowed}
+.bc{background:#22c55e;color:#fff}.bc:hover:not(:disabled){background:#16a34a}
+.bd{background:#ef4444;color:#fff}.bd:hover:not(:disabled){background:#dc2626}
+.br{background:#3b82f6;color:#fff;min-width:140px}.br:hover:not(:disabled){background:#2563eb}
+.br.on{background:#ef4444;animation:pulse 1.4s infinite}
+.ba{background:#f59e0b;color:#1e293b}.ba:hover:not(:disabled){background:#d97706}
+.bt{background:#8b5cf6;color:#fff}.bt:hover:not(:disabled){background:#7c3aed}
+.bg{background:#475569;color:#fff}
+.bp{background:#10b981;color:#fff;font-size:12px;padding:5px 10px;border-radius:6px}.bp:hover:not(:disabled){background:#059669}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.status{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1e293b;border-radius:8px;margin-bottom:14px;font-size:13px;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;background:#ef4444}.dot.on{background:#22c55e}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:768px){.cols{grid-template-columns:1fr}}
+.log-box{background:#1e293b;border-radius:12px;overflow:hidden}
+.log-hd{padding:10px 14px;background:#334155;font-weight:600;font-size:13px;display:flex;justify-content:space-between}
+.log-bd{height:300px;overflow-y:auto;padding:10px;font-family:Menlo,Monaco,monospace;font-size:11px;line-height:1.6}
+.le{margin-bottom:3px;word-break:break-all}
+.le.s{color:#38bdf8}.le.r{color:#4ade80}.le.i{color:#94a3b8}.le.e{color:#f87171}.le.a{color:#c084fc}
+.lt{color:#64748b;margin-right:6px}
+.res{margin-top:14px;background:#1e293b;border-radius:12px;overflow:hidden}
+.res-bd{padding:14px;min-height:60px}
+.ri{margin-bottom:10px;padding:9px 12px;border-radius:8px;display:flex;align-items:flex-start;gap:10px}
+.ri.stt{background:#1e3a5f;border-left:3px solid #38bdf8}
+.ri.tts{background:#1a3a2a;border-left:3px solid #4ade80}
+.ri.llm{background:#2d1f4e;border-left:3px solid #c084fc}
+.ri-body{flex:1}
+.rl{font-size:10px;color:#94a3b8;margin-bottom:3px;text-transform:uppercase}
+.rt{font-size:14px}
+.viz{height:40px;background:#0f172a;border-radius:6px;margin-top:8px;overflow:hidden}
+.viz canvas{width:100%;height:100%}
+.tip{font-size:12px;color:#64748b;text-align:center;margin-top:8px;line-height:1.6}
+.tip b{color:#94a3b8}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🤖 小智 WebSocket 语音测试</h1>
+
+<div class="panel">
+  <div class="row">
+    <label>WS 地址：</label>
+    <input type="text" id="wsUrl" value="ws://yourAddress:8092/ws/xiaozhi/v1/">
+  </div>
+  <div class="row">
+    <label>Device ID：</label>
+    <input type="text" id="deviceId" value="test-browser-001">
+  </div>
+  <div class="row">
+    <button class="bc" id="btnC" onclick="doConnect()">连接</button>
+    <button class="bd" id="btnD" onclick="doDisconnect()" disabled>断开</button>
+    <button class="br" id="btnR" onclick="toggleRec()" disabled>🎤 按住说话</button>
+    <button class="ba" id="btnA" onclick="doAbort()" disabled>⏹ 打断</button>
+    <button class="bg" onclick="clearLogs()">清空日志</button>
+  </div>
+  <div class="row">
+    <input type="text" id="txtIn" placeholder="输入文本直接发送（跳过 STT，测试 LLM → TTS 完整链路）" onkeydown="if(event.key==='Enter')sendTxt()">
+    <button class="bt" onclick="sendTxt()" id="btnT" disabled>发送文本</button>
+  </div>
+  <div class="viz"><canvas id="vizC"></canvas></div>
+  <div class="tip">
+    💡 按住 <b>空格键</b> 说话，松开停止 | 文本框输入可跳过 STT 直接测试 LLM→TTS<br>
+    🎤 录音使用浏览器 WebCodecs API 进行 Opus 编码（需 Chrome 94+）
+  </div>
+</div>
+
+<div class="status">
+  <div class="dot" id="sDot"></div>
+  <div>状态：<b id="sTxt">未连接</b></div>
+  <div style="margin-left:auto">Session：<b id="sId">-</b></div>
+  <div style="margin-left:16px">发送帧：<b id="sFrames">0</b></div>
+  <div style="margin-left:16px">接收帧：<b id="rFrames">0</b></div>
+</div>
+
+<div class="cols">
+  <div class="log-box">
+    <div class="log-hd">📤 发送日志</div>
+    <div class="log-bd" id="sLog"></div>
+  </div>
+  <div class="log-box">
+    <div class="log-hd">📥 接收日志</div>
+    <div class="log-bd" id="rLog"></div>
+  </div>
+</div>
+
+<div class="res">
+  <div class="log-hd">💬 对话结果</div>
+  <div class="res-bd" id="resBd"><div style="color:#64748b;text-align:center;padding:16px">连接后开始对话...</div></div>
+</div>
+</div>
+
+<script>
+// ============================================================
+// 全局状态
+// ============================================================
+let ws = null, isRec = false;
+let mediaStream = null, audioCtx = null, analyser = null;
+let sendFrameCount = 0, recvFrameCount = 0;
+let ttsChunks = [];       // 当前轮次收到的 Opus 帧
+let ttsRoundId = 0;       // TTS 轮次 ID，用于关联播放按钮
+let opusEncoder = null;   // WebCodecs AudioEncoder
+let pcmBuffer = [];       // 累积 PCM 样本用于凑满一帧
+let webCodecsSupported = false;
+
+const SAMPLE_RATE = 16000;
+const CHANNELS = 1;
+const FRAME_DURATION_MS = 60;
+const FRAME_SIZE = SAMPLE_RATE * FRAME_DURATION_MS / 1000; // 960
+
+// ============================================================
+// 工具函数
+// ============================================================
+function ts() {
+  const d = new Date();
+  return d.toTimeString().split(' ')[0] + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+function log(panel, cls, msg) {
+  const el = document.getElementById(panel);
+  const e = document.createElement('div');
+  e.className = 'le ' + cls;
+  e.innerHTML = '<span class="lt">' + ts() + '</span>' + esc(msg);
+  el.appendChild(e);
+  el.scrollTop = el.scrollHeight;
+}
+function setSt(on, txt) {
+  document.getElementById('sDot').className = 'dot' + (on ? ' on' : '');
+  document.getElementById('sTxt').textContent = txt;
+}
+function clearLogs() {
+  document.getElementById('sLog').innerHTML = '';
+  document.getElementById('rLog').innerHTML = '';
+}
+function updBtns(connected) {
+  document.getElementById('btnC').disabled = connected;
+  document.getElementById('btnD').disabled = !connected;
+  document.getElementById('btnR').disabled = !connected;
+  document.getElementById('btnA').disabled = !connected;
+  document.getElementById('btnT').disabled = !connected;
+}
+
+// ============================================================
+// 对话结果展示（含 TTS 播放按钮）
+// ============================================================
+function addRes(type, text, extraHtml) {
+  const bd = document.getElementById('resBd');
+  if (bd.querySelector('div[style]')) bd.innerHTML = '';
+  const labels = { stt: '🎤 语音识别', tts: '🔊 语音合成', llm: '🧠 LLM 情感' };
+  const d = document.createElement('div');
+  d.className = 'ri ' + type;
+  d.innerHTML = '<div class="ri-body"><div class="rl">' + (labels[type] || type) + '</div><div class="rt">' + esc(text) + '</div></div>' + (extraHtml || '');
+  bd.appendChild(d);
+  bd.scrollTop = bd.scrollHeight;
+  return d;
+}
+
+// ============================================================
+// WebSocket 连接
+// ============================================================
+function doConnect() {
+  const url = document.getElementById('wsUrl').value.trim();
+  const did = document.getElementById('deviceId').value.trim();
+  const full = url + (url.includes('?') ? '&' : '?') + 'device-id=' + encodeURIComponent(did);
+  log('sLog', 'i', '连接: ' + full);
+  setSt(false, '连接中...');
+  sendFrameCount = 0; recvFrameCount = 0;
+  document.getElementById('sFrames').textContent = '0';
+  document.getElementById('rFrames').textContent = '0';
+
+  // 检测 WebCodecs 支持
+  webCodecsSupported = typeof AudioEncoder === 'function';
+  if (!webCodecsSupported) {
+    log('sLog', 'e', '⚠ 浏览器不支持 WebCodecs AudioEncoder，录音功能不可用（需 Chrome 94+）');
+  }
+
+  ws = new WebSocket(full);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    setSt(true, '已连接');
+    log('sLog', 'i', '✅ WebSocket 已连接');
+    updBtns(true);
+    sendHello();
+  };
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) onBin(ev.data);
+    else onTxt(ev.data);
+  };
+  ws.onerror = () => { log('rLog', 'e', 'WebSocket 错误'); setSt(false, '错误'); };
+  ws.onclose = (ev) => {
+    log('rLog', 'i', '连接关闭 code=' + ev.code + ' reason=' + (ev.reason || '-'));
+    setSt(false, '已断开');
+    updBtns(false);
+    stopRec();
+    ws = null;
+  };
+}
+function doDisconnect() { stopRec(); if (ws) ws.close(); }
+
+// ============================================================
+// 协议消息
+// ============================================================
+function sendJ(obj) {
+  if (!ws || ws.readyState !== 1) return;
+  const j = JSON.stringify(obj);
+  ws.send(j);
+  log('sLog', 's', j);
+}
+function sendHello() {
+  sendJ({
+    type: 'hello',
+    features: { mcp: false, aec: false },
+    audio_params: { channels: CHANNELS, format: 'opus', sample_rate: SAMPLE_RATE, frame_duration: FRAME_DURATION_MS }
+  });
+}
+function doAbort() { sendJ({ type: 'abort', reason: 'user_manual' }); }
+function sendTxt() {
+  const inp = document.getElementById('txtIn');
+  const t = inp.value.trim();
+  if (!t) return;
+  sendJ({ type: 'listen', state: 'text', mode: 'manual', text: t });
+  addRes('stt', '(文本输入) ' + t);
+  inp.value = '';
+}
+
+// ============================================================
+// 接收消息
+// ============================================================
+function onTxt(data) {
+  log('rLog', 'r', data);
+  try {
+    const m = JSON.parse(data);
+    if (m.type === 'hello') {
+      document.getElementById('sId').textContent = m.session_id || '-';
+      log('rLog', 'i', '✅ 握手成功 session=' + m.session_id);
+    } else if (m.type === 'stt') {
+      addRes('stt', m.text || '');
+    } else if (m.type === 'tts') {
+      if (m.state === 'start') {
+        ttsChunks = [];
+        recvFrameCount = 0;
+        ttsRoundId++;
+        log('rLog', 'i', '🔊 TTS 开始');
+      } else if (m.state === 'sentence_start') {
+        addRes('tts', m.text || '');
+      } else if (m.state === 'stop') {
+        log('rLog', 'i', '🔊 TTS 结束, 共 ' + recvFrameCount + ' 帧');
+        addTtsPlayButton(ttsRoundId, [...ttsChunks]);
+      }
+    } else if (m.type === 'llm') {
+      if (m.emotion) addRes('llm', m.emotion);
+    } else if (m.type === 'iot') {
+      log('rLog', 'i', 'IoT: ' + JSON.stringify(m.commands));
+    }
+  } catch (e) { log('rLog', 'e', '解析失败: ' + e.message); }
+}
+
+function onBin(data) {
+  recvFrameCount++;
+  ttsChunks.push(new Uint8Array(data));
+  document.getElementById('rFrames').textContent = String(recvFrameCount);
+  if (recvFrameCount <= 3 || recvFrameCount % 10 === 0) {
+    log('rLog', 'a', '音频帧 #' + recvFrameCount + ' (' + data.byteLength + 'B)');
+  }
+}
+
+// ============================================================
+// TTS 播放（使用 WebCodecs AudioDecoder 解码 Opus 帧）
+// ============================================================
+function addTtsPlayButton(roundId, chunks) {
+  const bd = document.getElementById('resBd');
+  const d = document.createElement('div');
+  d.className = 'ri tts';
+  d.innerHTML = '<div class="ri-body"><div class="rl">🔊 TTS 音频</div><div class="rt">' + chunks.length + ' 帧 Opus 音频</div></div>';
+
+  const btn = document.createElement('button');
+  btn.className = 'bp';
+  btn.textContent = '▶ 播放';
+  btn.onclick = () => playTtsAudio(btn, chunks);
+  d.appendChild(btn);
+  bd.appendChild(d);
+  bd.scrollTop = bd.scrollHeight;
+}
+
+async function playTtsAudio(btn, chunks) {
+  if (chunks.length === 0) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ 解码中...';
+
+  try {
+    // 尝试使用 WebCodecs AudioDecoder
+    if (typeof AudioDecoder === 'function') {
+      await playWithWebCodecs(btn, chunks);
+    } else {
+      // 降级：尝试将 Opus 帧封装为可播放格式
+      await playWithFallback(btn, chunks);
+    }
+  } catch (e) {
+    log('rLog', 'e', '播放失败: ' + e.message);
+    btn.textContent = '❌ 失败';
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = '▶ 播放'; }, 2000);
+  }
+}
+
+async function playWithWebCodecs(btn, chunks) {
+  const allPcm = [];
+  let decodedSampleRate = SAMPLE_RATE;
+
+  await new Promise((resolve, reject) => {
+    const decoder = new AudioDecoder({
+      output: (audioData) => {
+        // Opus 解码器可能输出 48kHz（Opus 内部默认采样率），需要动态获取
+        decodedSampleRate = audioData.sampleRate;
+        const pcm = new Float32Array(audioData.numberOfFrames);
+        audioData.copyTo(pcm, { planeIndex: 0 });
+        allPcm.push(pcm);
+        audioData.close();
+      },
+      error: (e) => reject(e)
+    });
+
+    decoder.configure({
+      codec: 'opus',
+      sampleRate: SAMPLE_RATE,
+      numberOfChannels: CHANNELS
+    });
+
+    for (let i = 0; i < chunks.length; i++) {
+      decoder.decode(new EncodedAudioChunk({
+        type: 'key',
+        timestamp: i * FRAME_DURATION_MS * 1000, // 微秒
+        data: chunks[i]
+      }));
+    }
+
+    decoder.flush().then(resolve).catch(reject);
+  });
+
+  if (allPcm.length === 0) {
+    throw new Error('解码结果为空');
+  }
+
+  log('rLog', 'i', '解码采样率: ' + decodedSampleRate + 'Hz, 共 ' + allPcm.length + ' 段');
+
+  // 合并 PCM
+  const totalLen = allPcm.reduce((s, a) => s + a.length, 0);
+  const merged = new Float32Array(totalLen);
+  let offset = 0;
+  for (const pcm of allPcm) {
+    merged.set(pcm, offset);
+    offset += pcm.length;
+  }
+
+  // 使用解码后的实际采样率创建 AudioContext 和 Buffer，确保播放速度正确
+  const playCtx = new AudioContext({ sampleRate: decodedSampleRate });
+  const buffer = playCtx.createBuffer(1, merged.length, decodedSampleRate);
+  buffer.getChannelData(0).set(merged);
+  const source = playCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(playCtx.destination);
+
+  const duration = merged.length / decodedSampleRate;
+  btn.textContent = '🔊 播放中 ' + duration.toFixed(1) + 's';
+  log('rLog', 'i', '▶ 播放 TTS 音频 ' + duration.toFixed(2) + 's (' + decodedSampleRate + 'Hz)');
+
+  source.start();
+  source.onended = () => {
+    playCtx.close();
+    btn.textContent = '▶ 重播';
+    btn.disabled = false;
+    log('rLog', 'i', '✅ TTS 播放完成');
+  };
+}
+
+async function playWithFallback(btn, chunks) {
+  // 降级方案：直接将 PCM 静音播放并提示
+  log('rLog', 'e', '浏览器不支持 WebCodecs AudioDecoder，无法解码 Opus 帧');
+  log('rLog', 'i', '💡 请使用 Chrome 94+ 或使用 Python 脚本播放');
+  btn.textContent = '❌ 不支持';
+  setTimeout(() => { btn.textContent = '▶ 播放'; btn.disabled = false; }, 2000);
+}
+
+// ============================================================
+// 麦克风录音 + Opus 编码（WebCodecs AudioEncoder）
+// ============================================================
+function toggleRec() { isRec ? stopRec() : startRec(); }
+
+async function startRec() {
+  if (!webCodecsSupported) {
+    log('sLog', 'e', '浏览器不支持 WebCodecs，无法录音。请使用 Chrome 94+');
+    return;
+  }
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: SAMPLE_RATE, channelCount: CHANNELS, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  } catch (e) {
+    log('sLog', 'e', '获取麦克风失败: ' + e.message);
+    return;
+  }
+
+  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const src = audioCtx.createMediaStreamSource(mediaStream);
+
+  // 波形分析器
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  src.connect(analyser);
+
+  // 初始化 Opus 编码器
+  pcmBuffer = [];
+  sendFrameCount = 0;
+
+  try {
+    opusEncoder = new AudioEncoder({
+      output: (chunk) => {
+        // chunk.data 就是裸 Opus 帧
+        const opusFrame = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(opusFrame);
+        if (ws && ws.readyState === 1) {
+          ws.send(opusFrame.buffer);
+          sendFrameCount++;
+          document.getElementById('sFrames').textContent = String(sendFrameCount);
+          if (sendFrameCount <= 3 || sendFrameCount % 15 === 0) {
+            log('sLog', 'a', '发送帧 #' + sendFrameCount + ' (' + opusFrame.byteLength + 'B opus)');
+          }
+        }
+      },
+      error: (e) => { log('sLog', 'e', 'Opus 编码错误: ' + e.message); }
+    });
+
+    opusEncoder.configure({
+      codec: 'opus',
+      sampleRate: SAMPLE_RATE,
+      numberOfChannels: CHANNELS,
+      bitrate: 48000,
+      opus: { frameDuration: FRAME_DURATION_MS * 1000 } // 微秒
+    });
+  } catch (e) {
+    log('sLog', 'e', 'AudioEncoder 配置失败: ' + e.message);
+    log('sLog', 'i', '💡 可能需要更高版本的 Chrome，或使用 Python 脚本测试');
+    stopRec();
+    return;
+  }
+
+  // 使用 ScriptProcessorNode 采集 PCM 并送入 AudioEncoder
+  const proc = audioCtx.createScriptProcessor(4096, CHANNELS, CHANNELS);
+  let timestampUs = 0;
+
+  proc.onaudioprocess = (ev) => {
+    if (!isRec || !opusEncoder || opusEncoder.state === 'closed') return;
+    const inputData = ev.inputBuffer.getChannelData(0);
+
+    // 累积样本
+    for (let i = 0; i < inputData.length; i++) {
+      pcmBuffer.push(inputData[i]);
+    }
+
+    // 每凑满 FRAME_SIZE 样本送入编码器
+    while (pcmBuffer.length >= FRAME_SIZE) {
+      const frameSamples = pcmBuffer.splice(0, FRAME_SIZE);
+      const float32 = new Float32Array(frameSamples);
+
+      const audioData = new AudioData({
+        format: 'f32',
+        sampleRate: SAMPLE_RATE,
+        numberOfFrames: FRAME_SIZE,
+        numberOfChannels: CHANNELS,
+        timestamp: timestampUs,
+        data: float32
+      });
+      timestampUs += FRAME_DURATION_MS * 1000;
+
+      try {
+        opusEncoder.encode(audioData);
+      } catch (e) {
+        // 忽略编码器关闭后的错误
+      }
+      audioData.close();
+    }
+
+    // 绘制波形
+    drawViz();
+  };
+
+  src.connect(proc);
+  proc.connect(audioCtx.destination);
+
+  isRec = true;
+
+  // 发送 listen start
+  sendJ({ type: 'listen', state: 'start', mode: 'manual' });
+
+  const btn = document.getElementById('btnR');
+  btn.textContent = '🔴 录音中...';
+  btn.classList.add('on');
+  log('sLog', 'i', '🎤 开始录音 (SR=' + audioCtx.sampleRate + 'Hz, WebCodecs Opus)');
+}
+
+function stopRec() {
+  if (!isRec) return;
+  isRec = false;
+
+  if (ws && ws.readyState === 1) {
+    sendJ({ type: 'listen', state: 'stop', mode: 'manual' });
+  }
+
+  if (opusEncoder && opusEncoder.state !== 'closed') {
+    try { opusEncoder.close(); } catch (e) { /* ignore */ }
+    opusEncoder = null;
+  }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  analyser = null;
+  pcmBuffer = [];
+
+  const btn = document.getElementById('btnR');
+  btn.textContent = '🎤 按住说话';
+  btn.classList.remove('on');
+  log('sLog', 'i', '⏹ 停止录音, 共发送 ' + sendFrameCount + ' 帧');
+}
+
+// ============================================================
+// 波形可视化
+// ============================================================
+function drawViz() {
+  if (!analyser) return;
+  const c = document.getElementById('vizC');
+  const ctx = c.getContext('2d');
+  const w = c.width = c.offsetWidth * 2;
+  const h = c.height = c.offsetHeight * 2;
+  ctx.clearRect(0, 0, w, h);
+
+  const bufLen = analyser.frequencyBinCount;
+  const data = new Uint8Array(bufLen);
+  analyser.getByteTimeDomainData(data);
+
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const sliceW = w / bufLen;
+  for (let i = 0; i < bufLen; i++) {
+    const v = data[i] / 128.0;
+    const y = v * h / 2;
+    i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * sliceW, y);
+  }
+  ctx.stroke();
+}
+
+// ============================================================
+// 键盘快捷键：空格键按住说话
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    if (!isRec && ws && ws.readyState === 1) startRec();
+  }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    if (isRec) stopRec();
+  }
+});
+
+window.addEventListener('beforeunload', () => { stopRec(); if (ws) ws.close(); });
+</script>
+</body>
+</html>

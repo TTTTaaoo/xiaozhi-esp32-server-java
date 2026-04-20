@@ -15,12 +15,18 @@ import com.xiaozhi.utils.AudioUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -174,8 +180,15 @@ public class AliyunTtsService implements TtsService {
             return new String[]{"cosyvoice-v2", voiceParam};
         }
 
-        // 检查是否是音色克隆返回的格式（如：cosyvoice-v3-plus-voiceclone-xxx）
-        if (voiceParam.startsWith("cosyvoice-v3-plus-")) {
+        // 检查是否是 Qwen TTS 克隆音色（如：qwen-tts-vc-bailian-voice-xxx）
+        if (voiceParam.startsWith("qwen-tts-vc-")) {
+            return new String[]{"qwen3-tts-vc-2026-01-22", voiceParam};
+        }
+
+        // 检查是否是 CosyVoice 克隆音色（如：cosyvoice-v3-plus-voiceclone-xxx）
+        if (voiceParam.startsWith("cosyvoice-v3.5-flash-")) {
+            return new String[]{"cosyvoice-v3.5-flash", voiceParam};
+        } else if (voiceParam.startsWith("cosyvoice-v3-plus-")) {
             return new String[]{"cosyvoice-v3-plus", voiceParam};
         } else if (voiceParam.startsWith("cosyvoice-v3-flash-")) {
             return new String[]{"cosyvoice-v3-flash", voiceParam};
@@ -190,7 +203,7 @@ public class AliyunTtsService implements TtsService {
             String voice = parts.length > 1 ? parts[1] : "";
 
             // 验证模型名称是否为有效的 CosyVoice 模型
-            if ("cosyvoice-v2".equals(model) || "cosyvoice-v3-flash".equals(model) || "cosyvoice-v3-plus".equals(model)) {
+            if ("cosyvoice-v2".equals(model) || "cosyvoice-v3-flash".equals(model) || "cosyvoice-v3-plus".equals(model) || "cosyvoice-v3.5-flash".equals(model)) {
                 return new String[]{model, voice};
             }
             // 如果模型名称无效，将整个字符串视为音色名
@@ -218,6 +231,15 @@ public class AliyunTtsService implements TtsService {
         try {
             if (getVoiceName().contains("sambert")) {
                 return ttsSambert(text);
+            } else if (getVoiceName().startsWith("qwen-tts-vc-")) {
+                // Qwen TTS 克隆音色通过 HTTP API 调用（Java SDK 的 voice 参数不支持自定义字符串）
+                return ttsQwenVc(text);
+            } else if (getVoiceName().startsWith("cosyvoice-v3.5-")) {
+                // CosyVoice v3.5 系列通过 HTTP API 调用（WebSocket SDK 对 v3.5 克隆音色返回 418）
+                return ttsCosyvoiceHttp(text);
+            } else if (getVoiceName().startsWith("cosyvoice-")) {
+                // CosyVoice v2/v3 音色走 SpeechSynthesizer WebSocket SDK
+                return ttsCosyvoice(text);
             } else {
                 // 解析千问音色参数
                 String[] parsed = parseQwenVoiceParam(getVoiceName());
@@ -345,6 +367,251 @@ public class AliyunTtsService implements TtsService {
                     }
                 } else {
                     logger.error("语音合成aliyun - 使用{}模型语音合成失败，已达到最大重试次数：", getVoiceName(), e);
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Qwen TTS 克隆音色合成（通过 HTTP API 直接调用）
+     * Java SDK 的 MultiModalConversationParam.voice() 只接受 AudioParameters.Voice 枚举，
+     * 不支持自定义克隆音色字符串，因此需要直接调用 HTTP API。
+     */
+    private Path ttsQwenVc(String text) {
+        String modelName = "qwen3-tts-vc-2026-01-22";
+        String voiceName = getVoiceName();
+        int attempts = 0;
+
+        while (attempts < MAX_RETRY_ATTEMPTS) {
+            try {
+                Future<Path> future = sharedExecutor.submit(() -> {
+                    JsonObject input = new JsonObject();
+                    input.addProperty("text", text);
+                    input.addProperty("voice", voiceName);
+
+                    JsonObject payload = new JsonObject();
+                    payload.addProperty("model", modelName);
+                    payload.add("input", input);
+
+                    HttpURLConnection connection = (HttpURLConnection) URI.create(
+                            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+                    ).toURL().openConnection();
+                    connection.setRequestMethod("POST");
+                    connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+                    connection.setRequestProperty("Content-Type", "application/json");
+                    connection.setConnectTimeout(5000);
+                    connection.setReadTimeout(15000);
+                    connection.setDoOutput(true);
+
+                    try (OutputStream outputStream = connection.getOutputStream()) {
+                        outputStream.write(new Gson().toJson(payload).getBytes(StandardCharsets.UTF_8));
+                    }
+
+                    int status = connection.getResponseCode();
+                    String responseBody;
+                    try (InputStream inputStream = status >= 200 && status < 300
+                            ? connection.getInputStream() : connection.getErrorStream();
+                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = inputStream.read(buffer)) != -1) {
+                            baos.write(buffer, 0, bytesRead);
+                        }
+                        responseBody = baos.toString(StandardCharsets.UTF_8);
+                    }
+
+                    if (status != 200) {
+                        logger.error("Qwen TTS VC HTTP 调用失败: status={}, body={}", status, responseBody);
+                        return null;
+                    }
+
+                    JsonObject responseJson = new Gson().fromJson(responseBody, JsonObject.class);
+                    String audioUrl = responseJson.getAsJsonObject("output")
+                            .getAsJsonObject("audio")
+                            .get("url").getAsString();
+
+                    // 下载 WAV（24kHz），重采样到 16kHz 后保存
+                    Path outPath = Path.of(outputPath, getAudioFileName());
+                    try (InputStream audioStream = URI.create(audioUrl).toURL().openStream();
+                         ByteArrayOutputStream audioBaos = new ByteArrayOutputStream()) {
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = audioStream.read(buffer)) != -1) {
+                            audioBaos.write(buffer, 0, bytesRead);
+                        }
+                        byte[] pcm24k = AudioUtils.wavToPcm(audioBaos.toByteArray());
+                        byte[] pcm16k = AudioUtils.resamplePcm(pcm24k, 24000, 16000);
+                        AudioUtils.saveAsWav(outPath, pcm16k);
+                    }
+                    return outPath;
+                });
+
+                Path result;
+                try {
+                    result = future.get(TTS_TIMEOUT_SECONDS * 3, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    future.cancel(true);
+                    logger.warn("语音合成aliyun - Qwen TTS VC 超时，正在重试 ({}/{}) - 音色: {}",
+                            attempts + 1, MAX_RETRY_ATTEMPTS, voiceName);
+                    attempts++;
+                    if (attempts >= MAX_RETRY_ATTEMPTS) {
+                        logger.error("语音合成aliyun - Qwen TTS VC 多次超时，放弃重试 - 音色: {}", voiceName);
+                        return null;
+                    }
+                    TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                    continue;
+                }
+
+                if (result == null) {
+                    attempts++;
+                    if (attempts < MAX_RETRY_ATTEMPTS) {
+                        logger.warn("语音合成aliyun - Qwen TTS VC 返回null，正在重试 ({}/{}) - 音色: {}",
+                                attempts, MAX_RETRY_ATTEMPTS, voiceName);
+                        TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                        continue;
+                    } else {
+                        logger.error("语音合成aliyun - Qwen TTS VC 多次返回null，放弃重试 - 音色: {}", voiceName);
+                        return null;
+                    }
+                }
+                return result;
+            } catch (Exception e) {
+                attempts++;
+                if (attempts < MAX_RETRY_ATTEMPTS) {
+                    logger.warn("语音合成aliyun - Qwen TTS VC 失败，正在重试 ({}/{}) - 音色: {}: {}",
+                            attempts, MAX_RETRY_ATTEMPTS, voiceName, e.getMessage());
+                    try {
+                        TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return null;
+                    }
+                } else {
+                    logger.error("语音合成aliyun - Qwen TTS VC 失败，已达到最大重试次数 - 音色: {}", voiceName, e);
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * CosyVoice v3.5 系列通过 HTTP API 调用
+     * WebSocket SDK 对 v3.5 克隆音色返回 418 错误，因此使用 REST API。
+     */
+    private Path ttsCosyvoiceHttp(String text) {
+        String[] parsed = parseCosyVoiceParam(getVoiceName());
+        String modelName = parsed[0];
+        String voiceName = parsed[1];
+        int attempts = 0;
+
+        while (attempts < MAX_RETRY_ATTEMPTS) {
+            try {
+                Future<Path> future = sharedExecutor.submit(() -> {
+                    JsonObject input = new JsonObject();
+                    input.addProperty("text", text);
+                    input.addProperty("voice", voiceName);
+                    input.addProperty("format", "wav");
+                    input.addProperty("sample_rate", 16000);
+
+                    JsonObject payload = new JsonObject();
+                    payload.addProperty("model", modelName);
+                    payload.add("input", input);
+
+                    HttpURLConnection connection = (HttpURLConnection) URI.create(
+                            "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer"
+                    ).toURL().openConnection();
+                    connection.setRequestMethod("POST");
+                    connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+                    connection.setRequestProperty("Content-Type", "application/json");
+                    connection.setConnectTimeout(5000);
+                    connection.setReadTimeout(15000);
+                    connection.setDoOutput(true);
+
+                    try (OutputStream outputStream = connection.getOutputStream()) {
+                        outputStream.write(new Gson().toJson(payload).getBytes(StandardCharsets.UTF_8));
+                    }
+
+                    int status = connection.getResponseCode();
+                    String responseBody;
+                    try (InputStream inputStream = status >= 200 && status < 300
+                            ? connection.getInputStream() : connection.getErrorStream();
+                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = inputStream.read(buffer)) != -1) {
+                            baos.write(buffer, 0, bytesRead);
+                        }
+                        responseBody = baos.toString(StandardCharsets.UTF_8);
+                    }
+
+                    if (status != 200) {
+                        logger.error("CosyVoice HTTP 调用失败: status={}, body={}", status, responseBody);
+                        return null;
+                    }
+
+                    JsonObject responseJson = new Gson().fromJson(responseBody, JsonObject.class);
+                    String audioUrl = responseJson.getAsJsonObject("output")
+                            .getAsJsonObject("audio")
+                            .get("url").getAsString();
+
+                    // 下载 WAV 并保存
+                    Path outPath = Path.of(outputPath, getAudioFileName());
+                    try (InputStream audioStream = URI.create(audioUrl).toURL().openStream();
+                         FileOutputStream fos = new FileOutputStream(outPath.toFile())) {
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = audioStream.read(buffer)) != -1) {
+                            fos.write(buffer, 0, bytesRead);
+                        }
+                    }
+                    return outPath;
+                });
+
+                Path result;
+                try {
+                    result = future.get(TTS_TIMEOUT_SECONDS * 3, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    future.cancel(true);
+                    attempts++;
+                    logger.warn("语音合成aliyun - CosyVoice HTTP 超时，正在重试 ({}/{}) - 音色: {}",
+                            attempts, MAX_RETRY_ATTEMPTS, voiceName);
+                    if (attempts >= MAX_RETRY_ATTEMPTS) {
+                        logger.error("语音合成aliyun - CosyVoice HTTP 多次超时，放弃重试 - 音色: {}", voiceName);
+                        return null;
+                    }
+                    TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                    continue;
+                }
+
+                if (result == null) {
+                    attempts++;
+                    if (attempts < MAX_RETRY_ATTEMPTS) {
+                        logger.warn("语音合成aliyun - CosyVoice HTTP 返回null，正在重试 ({}/{}) - 音色: {}",
+                                attempts, MAX_RETRY_ATTEMPTS, voiceName);
+                        TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                        continue;
+                    } else {
+                        logger.error("语音合成aliyun - CosyVoice HTTP 多次返回null，放弃重试 - 音色: {}", voiceName);
+                        return null;
+                    }
+                }
+                return result;
+            } catch (Exception e) {
+                attempts++;
+                if (attempts < MAX_RETRY_ATTEMPTS) {
+                    logger.warn("语音合成aliyun - CosyVoice HTTP 失败，正在重试 ({}/{}) - 音色: {}: {}",
+                            attempts, MAX_RETRY_ATTEMPTS, voiceName, e.getMessage());
+                    try {
+                        TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return null;
+                    }
+                } else {
+                    logger.error("语音合成aliyun - CosyVoice HTTP 失败，已达到最大重试次数 - 音色: {}", voiceName, e);
                     return null;
                 }
             }

@@ -194,6 +194,19 @@ export function useRoleManager() {
         })
       }
 
+      // 自定义音色：从 TTS 配置的 configName 中提取（用户创建的克隆音色等）
+      ttsConfigs.value.forEach((config: Config) => {
+        if (config.configName && !voices.some(v => v.value === config.configName)) {
+          voices.push({
+            label: `${config.configName} (${config.provider} 自定义)`,
+            value: config.configName,
+            gender: '',
+            provider: config.provider as VoiceProvider,
+            ttsId: config.configId
+          })
+        }
+      })
+
       allVoices.value = voices
     } catch (error) {
       console.error('加载语音列表失败:', error)

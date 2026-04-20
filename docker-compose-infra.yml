@@ -9,14 +9,14 @@ services:
       - "3306:3306"  # 本地通过 3306 访问 MySQL
     environment:
       # 这些变量与 Dockerfile-mysql 中的 ENV 保持一致，仅作显式声明
-      MYSQL_ROOT_PASSWORD: abc123456
+      MYSQL_ROOT_PASSWORD: YourPassword
       MYSQL_DATABASE: xiaozhi
-      MYSQL_USER: xiaozhi
-      MYSQL_PASSWORD: 123456
+      MYSQL_USER: root
+      MYSQL_PASSWORD: YourPassword
     volumes:
       - mysql_data:/var/lib/mysql   # 持久化数据
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "xiaozhi", "-p123456"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pYourPassword"]
       interval: 10s
       timeout: 5s
       retries: 5

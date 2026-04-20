@@ -48,7 +48,7 @@
         <edge-tts.version>1.3.3</edge-tts.version>
         <concentus.version>1.0.2</concentus.version>
         <vorbis.version>0.8</vorbis.version>
-        <vosk.version>0.3.45</vosk.version>
+        <vosk.version>0.3.38</vosk.version>
         <webrtc.version>0.14.0</webrtc.version>
         <onnxruntime.version>1.23.2</onnxruntime.version>
         <tencent-speech.version>1.0.53</tencent-speech.version>

@@ -3,25 +3,6 @@ SET NAMES utf8mb4;
 SET CHARACTER SET utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
--- 创建本地用户并设置密码（使用mysql_native_password插件）
-CREATE USER IF NOT EXISTS 'xiaozhi'@'localhost' IDENTIFIED WITH mysql_native_password BY '123456';
-
--- 创建远程用户并设置密码（使用mysql_native_password插件）
-CREATE USER IF NOT EXISTS 'xiaozhi'@'%' IDENTIFIED WITH mysql_native_password BY '123456';
-
--- 仅授予本地用户对 xiaozhi 数据库的所有权限
-GRANT ALL PRIVILEGES ON xiaozhi.* TO 'xiaozhi'@'localhost';
-
--- 仅授予远程用户对 xiaozhi 数据库的所有权限
-GRANT ALL PRIVILEGES ON xiaozhi.* TO 'xiaozhi'@'%';
-
--- 刷新权限以使更改生效
-FLUSH PRIVILEGES;
-
--- 查看用户权限
-SHOW GRANTS FOR 'xiaozhi'@'localhost';
-SHOW GRANTS FOR 'xiaozhi'@'%';
-
 -- 创建数据库（如果不存在）
 CREATE DATABASE IF NOT EXISTS `xiaozhi` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -154,7 +135,7 @@ CREATE TABLE `xiaozhi`.`sys_config` (
   `configType` varchar(30) NOT NULL COMMENT '配置类型(llm, stt, tts等)',
   `modelType` varchar(30) DEFAULT NULL COMMENT 'LLM模型类型(chat, vision, intent, embedding等)',
   `provider` varchar(30) NOT NULL COMMENT '服务提供商(openai, vosk, aliyun, tencent等)',
-  `configName` varchar(50) DEFAULT NULL COMMENT '配置名称',
+  `configName` varchar(200) DEFAULT NULL COMMENT '配置名称',
   `configDesc` TEXT DEFAULT NULL COMMENT '配置描述',
   `appId` varchar(100) DEFAULT NULL COMMENT 'APP ID',
   `apiKey` text DEFAULT NULL COMMENT 'API密钥',

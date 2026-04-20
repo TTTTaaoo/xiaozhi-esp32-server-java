@@ -23,6 +23,9 @@ subscriptionConnectionMinimumIdleSize: 1
 # DNS监控间隔 (毫秒)
 dnsMonitoringInterval: 5000
 
+# Redis 密码
+password: "YourPassword"
+
 # 编解码器（用于序列化）
 codec: !<org.redisson.codec.JsonJacksonCodec> {}
 

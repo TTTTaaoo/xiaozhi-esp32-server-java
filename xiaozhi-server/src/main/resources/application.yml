@@ -56,8 +56,9 @@ spring:
   data:
     redis:
       # Redis 服务器地址（Spring Data Redis 和 Redisson 自动共享此配置）
-      host: localhost
+      host: yourAddress
       port: 6379
+      password: YourPassword
       database: 0
       # Lettuce 连接池配置（默认不开池，所有线程共享单连接，高并发下会成为瓶颈）
       lettuce:

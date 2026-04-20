@@ -50,6 +50,7 @@ const {
   loadSttOptions,
   getModelInfo,
   formatProviderName,
+  ttsConfigs,
 } = useRoleManager()
 
 // 查询表单
@@ -221,7 +222,7 @@ const handleEdit = (record: Role) => {
   editingRoleId.value = record.roleId
   avatarUrl.value = record.avatar || ''
   activeTabKey.value = '2'
-  
+
   // 编辑时默认使用自定义模式
   promptEditorMode.value = 'custom'
 
@@ -312,16 +313,28 @@ const handleSubmit = async () => {
     await formRef.value?.validate()
     submitLoading.value = true
 
-    // 统一处理：从所有可用音色中查找
+    // 统一处理：从所有可用音色中查找，支持手动输入的自定义音色
     const voiceInfo = allVoices.value.find(v => v.value === formData.voiceName)
-    const ttsId = voiceInfo?.ttsId || -1
-    
+    let ttsId: number | undefined
+    if (voiceInfo?.ttsId && voiceInfo.ttsId > 0) {
+      // 预置音色：使用音色关联的 ttsId
+      ttsId = voiceInfo.ttsId
+    } else if (selectedProvider.value) {
+      // 手动输入的自定义音色：使用当前选中的提供商对应的 ttsId
+      const providerConfig = ttsConfigs.value.find(c => c.provider === selectedProvider.value)
+      ttsId = providerConfig?.configId ? Number(providerConfig.configId) : undefined
+    } else {
+      ttsId = undefined
+    }
+
     const submitData: Partial<RoleFormData> & { avatar?: string } = {
       ...formData,
       avatar: avatarUrl.value || '',
       // 将 isDefault 布尔值转换为字符串 '1' 或 '0'
       isDefault: formData.isDefault ? '1' : '0',
       ttsId: ttsId,
+      // 将 -1 转为 null，避免数据库无符号整数列溢出
+      sttId: formData.sttId != null && formData.sttId > 0 ? formData.sttId : undefined,
     }
 
     if (editingRoleId.value) {
@@ -329,7 +342,7 @@ const handleSubmit = async () => {
     }
 
     // 1. 保存角色信息
-    const res = editingRoleId.value 
+    const res = editingRoleId.value
       ? await updateRole(submitData)
       : await addRole(submitData)
 
@@ -342,14 +355,14 @@ const handleSubmit = async () => {
           const excludeTools = allMcpTools.value
             .filter(tool => !selectedToolNames.value.includes(tool.name))
             .map(tool => tool.name)
-          
+
           await updateToolsStatus(savedRoleId, excludeTools)
         } catch (error) {
           console.error('保存工具选择失败:', error)
           message.warning(t('role.mcpSaveFailed'))
         }
       }
-      
+
       message.success(editingRoleId.value ? t('role.updateRoleSuccess') : t('role.createRoleSuccess'))
       resetForm()
       activeTabKey.value = '1'
@@ -471,7 +484,7 @@ const handlePlayVoice = async (voiceName?: string) => {
 
     // 检查缓存
     let audio = voiceAudioCache.get(voiceName)
-    
+
     if (!audio) {
       // 统一处理：从所有可用音色中查找
       const voiceInfo = allVoices.value.find(v => v.value === voiceName)
@@ -492,7 +505,7 @@ const handlePlayVoice = async (voiceName?: string) => {
 
       // 调用测试接口获取音频URL
       const result: any = await testVoice(testParams)
-      
+
       // 清除loading状态
       loadingVoiceId.value = ''
 
@@ -507,14 +520,14 @@ const handlePlayVoice = async (voiceName?: string) => {
           message.error(t('common.audioUrlInvalid'))
           return
         }
-        
+
         // 监听播放结束
         audio.onended = () => {
           if (playingVoiceId.value === voiceName) {
             playingVoiceId.value = ''
           }
         }
-        
+
         // 监听错误
         audio.onerror = () => {
           message.error(t('common.audioPlayFailed'))
@@ -615,9 +628,9 @@ const handleTtsCollapseChange = (activeKeys: string | string[]) => {
 const loadAllMcpTools = async () => {
   try {
     mcpToolsLoading.value = true
-    
+
     const isEditMode = !!editingRoleId.value
-    
+
     const [systemRes, disabledRes] = await Promise.all([
       getSystemGlobalTools(),
       getDisabledTools(isEditMode ? editingRoleId.value! : 0)
@@ -646,7 +659,7 @@ const loadAllMcpTools = async () => {
       const data = disabledRes.data as { globalDisabled?: string[]; roleDisabled?: string[] }
       globalDisabledTools.value = data.globalDisabled || []
       const roleDisabled = isEditMode ? (data.roleDisabled || []) : []
-      
+
       selectedToolNames.value = tools
         .filter(tool => !roleDisabled.includes(tool.name) && !globalDisabledTools.value.includes(tool.name))
         .map(tool => tool.name)
@@ -778,6 +791,15 @@ const filteredVoices = computed(() => {
   return selectedProvider.value ? list.filter(v => v.provider === selectedProvider.value) : list
 })
 
+// AutoComplete 需要的 options 格式
+const filteredVoiceOptions = computed(() => {
+  return filteredVoices.value.map(v => ({
+    label: v.label,
+    value: v.value,
+    model: v.model || '',
+  }))
+})
+
 // 提供商切换：切换后清空已选音色
 const handleProviderChange = () => {
   formData.voiceName = undefined
@@ -864,7 +886,7 @@ if (!editingRoleId.value) {
 
               <!-- 音色 -->
               <template v-else-if="column.dataIndex === 'voiceName'">
-                <a-tooltip 
+                <a-tooltip
                   :title="getVoiceDisplayName(record)"
                   placement="top"
                 >
@@ -877,7 +899,7 @@ if (!editingRoleId.value) {
 
               <!-- 模型 -->
               <template v-else-if="column.dataIndex === 'modelName'">
-                <a-tooltip 
+                <a-tooltip
                   :title="getModelInfo(record.modelId)?.desc || (getModelInfo(record.modelId)?.label || record.modelName || t('role.unknownModel'))"
                   :mouse-enter-delay="0.5"
                   placement="top"
@@ -1061,7 +1083,7 @@ if (!editingRoleId.value) {
                     :placeholder="t('role.selectModel')"
                     :loading="modelLoading"
                     show-search
-                    :filter-option="(input: string, option: { label: string; value: number }) => 
+                    :filter-option="(input: string, option: { label: string; value: number }) =>
                       option.label.toLowerCase().includes(input.toLowerCase())
                     "
                     @change="(value: number) => handleModelChange(value)"
@@ -1272,41 +1294,37 @@ if (!editingRoleId.value) {
                   name="voiceName"
                   :rules="[{ required: true, message: t('role.selectVoice') }]"
                 >
-                  <a-select
+                  <a-auto-complete
                     v-model:value="formData.voiceName"
                     :placeholder="t('role.selectVoice')"
-                    :loading="voiceLoading"
-                    show-search
-                    :filter-option="(input: string, option: { label: string; value: string }) => 
-                      option.label.toLowerCase().includes(input.toLowerCase())
+                    :options="filteredVoiceOptions"
+                    :filter-option="(input: string, option: { label: string; value: string }) =>
+                      option.label.toLowerCase().includes(input.toLowerCase()) ||
+                      option.value.toLowerCase().includes(input.toLowerCase())
                     "
+                    allow-clear
                   >
-                    <a-select-option
-                      v-for="voice in filteredVoices"
-                      :key="voice.value"
-                      :value="voice.value"
-                      :label="voice.label"
-                    >
+                    <template #option="{ label, value: optValue, model }">
                       <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <a-tag color="blue" v-if="voice.model">{{ voice.model }}</a-tag>
-                        <span>{{ voice.label }}</span>
+                        <a-tag color="blue" v-if="model">{{ model }}</a-tag>
+                        <span>{{ label }}</span>
                         <a-button
                           v-permission="'system:role'"
                           type="text"
                           size="small"
-                          :loading="loadingVoiceId === voice.value"
-                          @click.stop="handlePlayVoice(voice.value)"
+                          :loading="loadingVoiceId === optValue"
+                          @click.stop="handlePlayVoice(optValue)"
                           style="margin-left: 8px; padding: 0 4px;"
                         >
                           <template #icon>
-                            <LoadingOutlined v-if="loadingVoiceId === voice.value" />
-                            <PauseCircleOutlined v-else-if="playingVoiceId === voice.value" />
+                            <LoadingOutlined v-if="loadingVoiceId === optValue" />
+                            <PauseCircleOutlined v-else-if="playingVoiceId === optValue" />
                             <SoundOutlined v-else />
                           </template>
                         </a-button>
                       </div>
-                    </a-select-option>
-                  </a-select>
+                    </template>
+                  </a-auto-complete>
                 </a-form-item>
               </a-col>
             </a-row>
