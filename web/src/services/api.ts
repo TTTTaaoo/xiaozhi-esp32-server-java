@@ -24,6 +24,7 @@ export default {
     delete: '/device',
     export: '/device/export',
     generateToken: '/device/generateToken',
+    pushDisplay: '/device',
   },
   agent: {
     query: '/agent',

@@ -36,6 +36,7 @@ public class RedisBroadcast {
     public static final String CHANNEL_CLOSE_SESSION = "xiaozhi:close-session";
     public static final String CHANNEL_ROLE_UPDATED = "xiaozhi:role-updated";
     public static final String CHANNEL_DEVICE_UPDATED = "xiaozhi:device-updated";
+    public static final String CHANNEL_PUSH_DISPLAY_COMMAND = "xiaozhi:push-display-command";
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -98,6 +99,20 @@ public class RedisBroadcast {
     public void configChanged(String configType, Integer configId) {
         String payload = JsonUtil.toJson(Map.of("configType", configType, "configId", configId));
         publish(CHANNEL_CONFIG_CHANGED, payload);
+    }
+
+    /**
+     * 向设备推送显示指令（如设置背景图片）
+     *
+     * @param deviceId 目标设备ID
+     * @param command  指令名称（如 "set_background"）
+     * @param params   指令参数
+     */
+    public void pushDisplayCommand(String deviceId, String command, Map<String, Object> params) {
+        Map<String, Object> payload = new java.util.HashMap<>(params);
+        payload.put("deviceId", deviceId);
+        payload.put("command", command);
+        publish(CHANNEL_PUSH_DISPLAY_COMMAND, JsonUtil.toJson(payload));
     }
 
     private void publish(String channel, String message) {

@@ -20,6 +20,8 @@ import com.xiaozhi.device.domain.repository.DeviceRepository;
 import com.xiaozhi.device.domain.vo.VerifyCode;
 import com.xiaozhi.device.service.DeviceService;
 import com.xiaozhi.role.service.RoleService;
+import com.xiaozhi.communication.common.RedisBroadcast;
+import com.xiaozhi.storage.service.StorageServiceFactory;
 import com.xiaozhi.utils.CmsUtils;
 import com.xiaozhi.utils.CommonUtils;
 import jakarta.annotation.Resource;
@@ -34,6 +36,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 设备领域应用服务。
@@ -67,6 +70,15 @@ public class DeviceAppService {
 
     @Resource
     private DialogueServerRegistry dialogueServerRegistry;
+
+    @Resource
+    private RedisBroadcast redisBroadcast;
+
+    @Resource
+    private StorageServiceFactory storageServiceFactory;
+
+    /** 记录每个设备最新的背景图存储路径，用于推送新图时清理旧图 */
+    private final ConcurrentHashMap<String, String> deviceBackgroundPaths = new ConcurrentHashMap<>();
 
 
     public PageResp<DeviceResp> page(DevicePageReq req, Integer userId) {
@@ -191,6 +203,69 @@ public class DeviceAppService {
             throw new ResourceNotFoundException("设备不存在或无权访问");
         }
         deviceRepository.delete(deviceId);
+    }
+
+    /**
+     * 向设备推送显示指令。
+     * 通过 Redis 广播到 dialogue 实例，由 dialogue 实例向在线设备推送 WebSocket 消息。
+     * 设备离线时指令不会被缓存。
+     *
+     * @param deviceId       目标设备ID
+     * @param commandPayload 指令内容，必须包含 "command" 字段
+     * @return 推送结果描述
+     */
+    public String pushDisplayCommand(String deviceId, Map<String, Object> commandPayload) {
+        Device device = deviceRepository.findById(deviceId)
+                .orElseThrow(() -> new ResourceNotFoundException("设备不存在或无权访问"));
+
+        String command = (String) commandPayload.get("command");
+        if (!StringUtils.hasText(command)) {
+            throw new IllegalArgumentException("缺少 command 参数");
+        }
+
+        // 背景图片清理：每设备只保留最新一张，推送新图时删除旧图
+        if ("set_background".equals(command)) {
+            String newUrl = (String) commandPayload.get("url");
+            if (StringUtils.hasText(newUrl)) {
+                cleanupPreviousBackground(deviceId, newUrl);
+            }
+        }
+
+        redisBroadcast.pushDisplayCommand(deviceId, command, commandPayload);
+        logger.info("已发送显示指令广播 - deviceId: {}, command: {}", deviceId, command);
+        return "指令已发送，设备在线时将立即生效";
+    }
+
+    /**
+     * 清理设备的旧背景图片，并记录新的背景图路径。
+     * 从完整 URL 中提取存储路径（uploads/ 开头的相对路径），通过 StorageService 删除旧文件。
+     */
+    private void cleanupPreviousBackground(String deviceId, String newUrl) {
+        String newStoredPath = extractStoredPath(newUrl);
+        String previousPath = deviceBackgroundPaths.put(deviceId, newStoredPath);
+
+        if (StringUtils.hasText(previousPath) && !previousPath.equals(newStoredPath)) {
+            try {
+                storageServiceFactory.getStorageService().remove(previousPath);
+                logger.info("已清理设备旧背景图 - deviceId: {}, path: {}", deviceId, previousPath);
+            } catch (Exception e) {
+                logger.warn("清理旧背景图失败 - deviceId: {}, path: {}, error: {}", deviceId, previousPath, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 从文件 URL 中提取存储路径。
+     * 本地存储返回的 URL 格式为 "http://host:port/uploads/image/..."，需要提取 "uploads/..." 部分。
+     * 云存储返回的是完整 URL，直接作为存储路径使用。
+     */
+    private String extractStoredPath(String url) {
+        if (url == null) return "";
+        int uploadsIndex = url.indexOf("uploads/");
+        if (uploadsIndex >= 0) {
+            return url.substring(uploadsIndex);
+        }
+        return url;
     }
 
     /**

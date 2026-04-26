@@ -63,6 +63,7 @@ public class RedisSubscriber {
         addListener(container, "onCloseSession", RedisBroadcast.CHANNEL_CLOSE_SESSION);
         addListener(container, "onRoleUpdated", RedisBroadcast.CHANNEL_ROLE_UPDATED);
         addListener(container, "onDeviceUpdated", RedisBroadcast.CHANNEL_DEVICE_UPDATED);
+        addListener(container, "onPushDisplayCommand", RedisBroadcast.CHANNEL_PUSH_DISPLAY_COMMAND);
 
         return container;
     }
@@ -153,6 +154,39 @@ public class RedisSubscriber {
                 session.setDevice(freshDevice);
                 logger.info("已刷新设备信息（来自跨实例广播） - deviceId: {}", deviceId);
             }
+        }
+    }
+
+    /**
+     * 推送显示指令到在线设备（如设置背景图片）
+     */
+    public void onPushDisplayCommand(String message) {
+        try {
+            Map<String, Object> payload = JsonUtil.fromJson(message, new TypeReference<>() {});
+            String deviceId = (String) payload.get("deviceId");
+            String command = (String) payload.get("command");
+            if (deviceId == null || command == null) {
+                logger.warn("显示指令缺少必要参数 - message: {}", message);
+                return;
+            }
+
+            ChatSession session = sessionManager.getSessionByDeviceId(deviceId);
+            if (session == null || !session.isOpen()) {
+                logger.debug("设备不在本实例或不在线，跳过显示指令 - deviceId: {}", deviceId);
+                return;
+            }
+
+            // 构建发送给 ESP32 的 JSON 消息
+            Map<String, Object> deviceMessage = new java.util.HashMap<>(payload);
+            deviceMessage.put("type", "display");
+            deviceMessage.remove("deviceId");
+            deviceMessage.put("session_id", session.getSessionId());
+
+            String jsonMessage = JsonUtil.toJson(deviceMessage);
+            session.sendTextMessage(jsonMessage);
+            logger.info("已推送显示指令到设备 - deviceId: {}, command: {}", deviceId, command);
+        } catch (Exception e) {
+            logger.error("处理显示指令广播失败", e);
         }
     }
 

@@ -1,14 +1,18 @@
 import api from './api'
 import { useUserStore } from '@/store/user'
 
+export interface UploadResponseData {
+  url: string
+  relativePath?: string
+  fileName?: string
+  newFileName?: string
+  hash?: string
+}
+
 export interface UploadResponse {
   code: number
   message: string
-  url: string
-  fileName?: string
-  newFileName?: string
-  fileHash?: string
-  hash?: string
+  data: UploadResponseData
 }
 
 export interface UploadOptions {
@@ -59,7 +63,8 @@ export function uploadFile(
         try {
           const response: UploadResponse = JSON.parse(xhr.responseText)
           if (response.code === 200) {
-            resolve(options?.fullResponse ? response : response.url)
+            const url = response.data?.url || ''
+            resolve(options?.fullResponse ? response : url)
           } else {
             reject(new Error(response.message || '上传失败'))
           }

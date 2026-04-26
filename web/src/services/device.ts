@@ -43,3 +43,10 @@ export function clearDeviceMemory(deviceId: string) {
 export function generateDeviceToken(deviceId: string) {
   return http.post<{ token: string }>(api.device.generateToken, { deviceId })
 }
+
+/**
+ * 推送显示指令到设备
+ */
+export function pushDisplayCommand(deviceId: string, command: string, params: Record<string, unknown> = {}) {
+  return http.post(`${api.device.pushDisplay}/${deviceId}/display`, { command, ...params })
+}

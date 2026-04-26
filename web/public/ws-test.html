@@ -49,6 +49,48 @@ button:disabled{opacity:.35;cursor:not-allowed}
 .viz canvas{width:100%;height:100%}
 .tip{font-size:12px;color:#64748b;text-align:center;margin-top:8px;line-height:1.6}
 .tip b{color:#94a3b8}
+
+/* ESP32 模拟屏幕 */
+.esp-panel{background:#1e293b;border-radius:12px;padding:16px;margin-bottom:14px}
+.esp-panel .log-hd{margin:-16px -16px 14px;border-radius:12px 12px 0 0}
+.esp-screen-wrap{display:flex;justify-content:center;align-items:center}
+.esp-screen{
+  width:320px;height:240px;
+  background:#000;border:3px solid #475569;border-radius:6px;
+  position:relative;overflow:hidden;
+  font-family:'Segoe UI',Roboto,sans-serif;
+  image-rendering:pixelated;
+}
+.esp-bg{position:absolute;inset:0;background-size:cover;background-position:center;z-index:0;transition:background-image .3s}
+.esp-status{
+  position:absolute;top:0;left:0;right:0;height:20px;
+  background:rgba(0,0,0,.55);z-index:2;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 6px;font-size:10px;color:#ccc;
+}
+.esp-emotion{
+  position:absolute;top:24px;left:0;right:0;
+  text-align:center;font-size:40px;z-index:1;
+  transition:all .3s;
+}
+.esp-chat{
+  position:absolute;bottom:0;left:0;right:0;
+  max-height:120px;overflow-y:auto;z-index:2;
+  padding:6px 8px;
+  background:linear-gradient(transparent, rgba(0,0,0,.7) 30%);
+}
+.esp-chat-msg{font-size:11px;color:#e2e8f0;margin-bottom:3px;word-break:break-all}
+.esp-chat-msg .esp-role{color:#38bdf8;font-weight:600;margin-right:4px;font-size:10px}
+.esp-chat-msg.user .esp-role{color:#4ade80}
+.esp-chat-msg.system .esp-role{color:#f59e0b}
+.esp-notification{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(0,0,0,.8);color:#fff;padding:6px 14px;border-radius:16px;
+  font-size:11px;z-index:3;pointer-events:none;
+  opacity:0;transition:opacity .3s;
+}
+.esp-notification.show{opacity:1}
+.esp-info{display:flex;justify-content:center;gap:16px;margin-top:10px;font-size:11px;color:#64748b}
 </style>
 </head>
 <body>
@@ -101,6 +143,28 @@ button:disabled{opacity:.35;cursor:not-allowed}
   </div>
 </div>
 
+<!-- ESP32 模拟屏幕 -->
+<div class="esp-panel">
+  <div class="log-hd">📺 ESP32 模拟屏幕 (320×240)</div>
+  <div class="esp-screen-wrap">
+    <div class="esp-screen" id="espScreen">
+      <div class="esp-bg" id="espBg"></div>
+      <div class="esp-status">
+        <span id="espStatusLeft">⚡ Idle</span>
+        <span id="espStatusRight">--:--</span>
+      </div>
+      <div class="esp-emotion" id="espEmotion">😐</div>
+      <div class="esp-chat" id="espChat"></div>
+      <div class="esp-notification" id="espNotify"></div>
+    </div>
+  </div>
+  <div class="esp-info">
+    <span>背景: <b id="espBgInfo">无</b></span>
+    <span>情绪: <b id="espEmotionInfo">neutral</b></span>
+    <span>状态: <b id="espStateInfo">idle</b></span>
+  </div>
+</div>
+
 <div class="res">
   <div class="log-hd">💬 对话结果</div>
   <div class="res-bd" id="resBd"><div style="color:#64748b;text-align:center;padding:16px">连接后开始对话...</div></div>
@@ -108,6 +172,68 @@ button:disabled{opacity:.35;cursor:not-allowed}
 </div>
 
 <script>
+// ============================================================
+// ESP32 模拟屏幕控制
+// ============================================================
+const espEmojis = {
+  neutral: '😐', happy: '😊', laughing: '😄', funny: '🤣',
+  sad: '😢', angry: '😠', crying: '😭', loving: '🥰',
+  embarrassed: '😳', surprised: '😲', shocked: '😱',
+  thinking: '🤔', winking: '😉', cool: '😎', relaxed: '😌',
+  delicious: '🤤', kissy: '😘', confident: '😏', sleepy: '😴',
+  silly: '🤪', confused: '😵‍💫', link: '🔗', circle_xmark: '❌'
+};
+let espNotifyTimer = null;
+
+function espSetBackground(url) {
+  const bg = document.getElementById('espBg');
+  bg.style.backgroundImage = 'url(' + url + ')';
+  // 截取文件名显示
+  const name = url.split('/').pop() || url;
+  document.getElementById('espBgInfo').textContent = name.length > 20 ? name.substring(0, 20) + '...' : name;
+  espShowNotification('Background updated');
+}
+
+function espSetEmotion(emotion) {
+  const emoji = espEmojis[emotion] || emotion;
+  document.getElementById('espEmotion').textContent = emoji;
+  document.getElementById('espEmotionInfo').textContent = emotion;
+}
+
+function espSetStatus(text) {
+  document.getElementById('espStatusLeft').textContent = '⚡ ' + text;
+  document.getElementById('espStateInfo').textContent = text;
+}
+
+function espAddChatMessage(role, text) {
+  const chat = document.getElementById('espChat');
+  const msg = document.createElement('div');
+  msg.className = 'esp-chat-msg ' + role;
+  const roleLabel = role === 'user' ? 'You' : role === 'assistant' ? 'AI' : 'Sys';
+  msg.innerHTML = '<span class="esp-role">' + roleLabel + ':</span>' + esc(text);
+  chat.appendChild(msg);
+  chat.scrollTop = chat.scrollHeight;
+  // 最多保留 8 条消息
+  while (chat.children.length > 8) chat.removeChild(chat.firstChild);
+}
+
+function espShowNotification(text, durationMs) {
+  const el = document.getElementById('espNotify');
+  el.textContent = text;
+  el.classList.add('show');
+  if (espNotifyTimer) clearTimeout(espNotifyTimer);
+  espNotifyTimer = setTimeout(() => { el.classList.remove('show'); }, durationMs || 2000);
+}
+
+function espUpdateClock() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('espStatusRight').textContent = hh + ':' + mm;
+}
+setInterval(espUpdateClock, 10000);
+espUpdateClock();
+
 // ============================================================
 // 全局状态
 // ============================================================
@@ -250,22 +376,39 @@ function onTxt(data) {
     if (m.type === 'hello') {
       document.getElementById('sId').textContent = m.session_id || '-';
       log('rLog', 'i', '✅ 握手成功 session=' + m.session_id);
+      espSetStatus('Connected');
+      espShowNotification('Session: ' + (m.session_id || '-'));
     } else if (m.type === 'stt') {
       addRes('stt', m.text || '');
+      if (m.text) espAddChatMessage('user', m.text);
     } else if (m.type === 'tts') {
       if (m.state === 'start') {
         ttsChunks = [];
         recvFrameCount = 0;
         ttsRoundId++;
         log('rLog', 'i', '🔊 TTS 开始');
+        espSetStatus('Speaking');
       } else if (m.state === 'sentence_start') {
         addRes('tts', m.text || '');
+        if (m.text) espAddChatMessage('assistant', m.text);
       } else if (m.state === 'stop') {
         log('rLog', 'i', '🔊 TTS 结束, 共 ' + recvFrameCount + ' 帧');
         addTtsPlayButton(ttsRoundId, [...ttsChunks]);
+        espSetStatus('Idle');
       }
     } else if (m.type === 'llm') {
-      if (m.emotion) addRes('llm', m.emotion);
+      if (m.emotion) {
+        addRes('llm', m.emotion);
+        espSetEmotion(m.emotion);
+      }
+    } else if (m.type === 'display') {
+      log('rLog', 'i', '📺 Display command: ' + (m.command || 'unknown'));
+      if (m.command === 'set_background' && m.url) {
+        espSetBackground(m.url);
+        log('rLog', 'i', '🖼 背景图片已更新: ' + m.url);
+      } else {
+        espShowNotification('Display: ' + (m.command || '?'));
+      }
     } else if (m.type === 'iot') {
       log('rLog', 'i', 'IoT: ' + JSON.stringify(m.commands));
     }

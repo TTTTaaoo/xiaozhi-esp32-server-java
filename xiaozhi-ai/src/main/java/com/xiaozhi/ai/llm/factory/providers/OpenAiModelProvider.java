@@ -59,16 +59,18 @@ public class OpenAiModelProvider implements ChatModelProvider {
         String model = config.getConfigName();
         Double temperature = role.getTemperature();
         Double topP = role.getTopP();
-        
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
-        headers.add("Content-Type", "application/json");
-        
+
+        // 注意：不要手动添加 Content-Type 头！
+        // Spring AI 的 OpenAiApi 内部会通过 setContentType(MediaType.APPLICATION_JSON) 自动设置（OpenAiApi.java:148），
+        // 然后用 h.addAll(headers) 把外部传入的 headers 也加上去（OpenAiApi.java:150），
+        // 如果外部再传 Content-Type，会导致请求出现两个 Content-Type，
+        // aiohttp 等严格的网关会返回 400 "Duplicate 'Content-Type' header found."
+
         // LM Studio不支持Http/2，所以需要强制使用HTTP/1.1
         var openAiApi = OpenAiApi.builder()
                 .apiKey(StringUtils.hasText(apiKey) ? new SimpleApiKey(apiKey) : new NoopApiKey())
                 .baseUrl(endpoint)
                 .completionsPath("/chat/completions")
-                .headers(headers)
                 .webClientBuilder(WebClient.builder()
                         // Force HTTP/1.1 for streaming
                         .clientConnector(new JdkClientHttpConnector(HttpClient.newBuilder()
@@ -100,14 +102,11 @@ public class OpenAiModelProvider implements ChatModelProvider {
 
     @Override
     public EmbeddingModel createEmbeddingModel(ConfigBO config) {
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
-        headers.add("Content-Type", "application/json");
-
+        // 同 createChatModel：不要手动添加 Content-Type 头，Spring AI 内部会自动设置
         var openAiApi = OpenAiApi.builder()
                 .apiKey(StringUtils.hasText(config.getApiKey()) ? new SimpleApiKey(config.getApiKey()) : new NoopApiKey())
                 .baseUrl(config.getApiUrl())
                 .embeddingsPath("/embeddings")
-                .headers(headers)
                 .webClientBuilder(WebClient.builder()
                         .clientConnector(new JdkClientHttpConnector(HttpClient.newBuilder()
                                 .version(HttpClient.Version.HTTP_1_1)

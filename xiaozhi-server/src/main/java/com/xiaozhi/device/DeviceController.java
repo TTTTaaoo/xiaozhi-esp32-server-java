@@ -117,6 +117,21 @@ public class DeviceController extends BaseController {
         return ApiResponse.success("删除成功");
     }
 
+    /**
+     * 推送显示指令到设备（如设置背景图片）
+     */
+    @PostMapping("/{deviceId}/display")
+    @ResponseBody
+    @SaCheckPermission("system:device:api:update")
+    @CheckOwner(resource = "device", id = "#deviceId")
+    @AuditLog(module = "设备管理", operation = "推送显示指令")
+    @Operation(summary = "推送显示指令", description = "向在线设备推送显示指令，如设置背景图片。设备离线时指令不会被缓存。")
+    public ApiResponse<?> pushDisplayCommand(
+            @PathVariable String deviceId,
+            @RequestBody java.util.Map<String, Object> commandPayload) {
+        return ApiResponse.success(deviceAppService.pushDisplayCommand(deviceId, commandPayload));
+    }
+
     @SaIgnore
     @RequestMapping(value = "/ota", method = {RequestMethod.GET, RequestMethod.POST})
     @ResponseBody
